@@ -2,12 +2,14 @@
 Bayesian model selection for Oxidation Kinetics modelling
 Install requirements in a python enviroment using pip install -r requirements.txt
 
-Milestones:
+Milestones completed:
 - Implemented Inference for diferent models
 - Posterior Predictive plots for every model
 - Results in the IPython Notebook!
+- Compute BIC and logLikelihood for every model
+- Estimate ELPD using WAIC and compare each model
+- Extend the analysis to the whole dataset
 
-TODO:
-- Compute Bayes factor for every model
-- Perform model Selection
-- Use WAIC or other methodology?
+TODO
+- Perform data sanitation/normalizing
+- Maybe implement a different statistical model?
