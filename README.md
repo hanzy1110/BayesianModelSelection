@@ -1,2 +1,2 @@
 # BayesianModelSelection
-Bayesian model selection for 
+Bayesian model selection for Oxidation Kinetics modelling
