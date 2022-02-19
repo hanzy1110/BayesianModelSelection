@@ -10,7 +10,7 @@ Milestones completed:
 - Compute BIC and logLikelihood for every model
 - Estimate ELPD using WAIC and compare each model
 - Extend the analysis to the whole dataset
-19/2/2022
+--19/2/2022
 - Added Paralinear model to the model selection framework (taken from Paralinear Oxidation of Cr-Si-C-Coated C/SiC at 1300�C in Wet
 and Dry Air Environments WU2019)
 - Spline regression implemented (https://docs.pymc.io/projects/examples/en/latest/splines/spline.html)
