@@ -1,3 +1,4 @@
+import imp
 import os
 import pandas as pd
 import numpy as np
@@ -6,37 +7,10 @@ import pymc3 as pm
 import seaborn as sns
 import matplotlib.pyplot as plt
 from typing import Callable, Dict, Tuple, Any
+from pymc3.exceptions import SamplingError
 
-def poly_model(time:np.ndarray, n:int=1) -> np.ndarray:
-    return np.power(time, 1/n)
-
-def log_model(time:np.ndarray) -> np.ndarray:
-    return np.log(time)
-
-def inv_log_model(time:np.ndarray) -> np.ndarray:
-    return 1/time
-
-def calculate_BIC(model:pm.Model, n)->Tuple[np.float64, np.float64]:
-    MAP = pm.find_MAP(model = model)
-    logP = -model.logp(MAP)
-    k = 0.5 * len(list(MAP.keys()))
-    return k*np.log(n) + 2*logP, logP
-
-def create_dirs(data_path:str):
-    dirs_to_build = ['summaries', 'tracePlots', 'ppcPlots', 'selection_metrics']
-    
-    try:
-        data_path = data_path.replace('.csv', '')
-        data_path = os.path.join('output_info', data_path)
-        os.mkdir(data_path)
-    except FileExistsError:
-        pass
-    
-    try:
-        for dir_ in dirs_to_build:
-            os.mkdir(os.path.join(data_path, dir_))
-    except FileExistsError:
-        pass
+from .model_helpers import (poly_model, paralinear_model, helper_theano, inv_log_model, log_model)
+from .helpers import calculate_BIC
 
 class dataAnalizer():
     def __init__(self, folder_path:str, filename:str) -> None:
@@ -47,7 +21,8 @@ class dataAnalizer():
                             'cubic_model': (lambda x: poly_model(x, n=3),lambda x: poly_model(x, n=1)),
                             'cuartic_model': (lambda x: poly_model(x, n=4),lambda x: poly_model(x, n=1)),
                             'log_model': (log_model, poly_model),
-                            'inv_log_model': (log_model, inv_log_model)
+                            'inv_log_model': (log_model, inv_log_model),
+                            'paralinear_model': (paralinear_model, helper_theano)
                         }
         filePATH = os.path.join(folder_path,filename)
         print('--//--'*20)
@@ -90,6 +65,29 @@ class dataAnalizer():
 
         return model, time, mass_gain
     
+    def build_paralinear_model(self, mean_func:Callable):
+        time, mass_gain = self.sanitize_data()
+        
+        with pm.Model() as model:
+            # kp = ks[0] kl = ks[1]
+            kp = pm.HalfCauchy('kp', beta=10)
+            kl = pm.HalfNormal('kl', sigma=1)
+
+            # mu = mass_gain - kp/kl * (1-exp_mass_gain**(kl/kp))
+
+            mu = mean_func(mass_gain, t=0, kp=kp, kl=kl)
+
+            # Use studentT since it gave better results!
+            nu = pm.HalfNormal('Nu', sigma=1)
+            noise = pm.HalfNormal('noise', sigma=1)
+
+            likelihood = pm.StudentT('likelihood',
+                                    mu=mu,
+                                    nu=nu,
+                                    sigma=noise,
+                                    observed=time)
+        return model, time, mass_gain
+    
     def perform_inference_on_models(self) -> Tuple[Dict[str, az.InferenceData], Dict[str, pm.Model]]:
         # Initial_inference process->
         trace_dict: Dict[str, az.InferenceData] = {}
@@ -98,12 +96,20 @@ class dataAnalizer():
         for model, args in self.model_mapping.items():
             print('-'*30)
             print(f'Performing Inference for: {model}')
-
-            Inference_model, time, mass_gain = self.build_model(*args)
+            
+            if model == 'paralinear_model':
+                Inference_model, time, mass_gain = self.build_paralinear_model(args[1])
+            else:
+                Inference_model, time, mass_gain = self.build_model(*args)
 
             with Inference_model:
-
-                trace = pm.sample(return_inferencedata=True)
+                try:
+                    trace = pm.sample(return_inferencedata=False)
+                except SamplingError as e:
+                    print('Sampling error! Discarting Model')
+                    print(e)
+                    continue
+                    
                 trace_dict[model] = trace
                 model_dict[model] = Inference_model
                 sum = az.summary(trace)
@@ -113,6 +119,7 @@ class dataAnalizer():
                 plt.figure()
                 az.plot_trace(trace)
                 plt.savefig(f'output_info/{self.path}/tracePlots/{model}.png')
+                plt.close()
         
         return trace_dict, model_dict
     
@@ -124,7 +131,19 @@ class dataAnalizer():
             plt.xlabel(f'Time transformed according to: {model}')
             plt.ylabel(f'Mass Gain transformed according to: {model}')        
             
-            pm.plot_posterior_predictive_glm(trace_dict[model],
+            if model == 'paralinear_model':
+                try:
+                    pm.plot_posterior_predictive_glm(trace_dict[model],
+                                 eval=time,
+                                 lm=lambda x, sample: args[0](
+                                     x, sample['kp'], sample['kl']),
+                                 samples=100,
+                                 label="Posterior Predictive regression lines")
+                except KeyError:
+                    print('model isnt available!')
+                    continue
+            else:
+                pm.plot_posterior_predictive_glm(trace_dict[model],
                                             eval = time,
                                             lm = lambda x,sample: args[1](sample['C'] + sample['k'] * args[0](x)), 
                                             samples=100, 
@@ -134,6 +153,8 @@ class dataAnalizer():
         
             plt.legend()
             plt.savefig(f'output_info/{self.path}/ppcPlots/{model}.png')
+            plt.close()
+            
             
     def model_selection_metric_plots(self, trace_dict, model_dict):
         time, _ = self.sanitize_data()
@@ -143,7 +164,8 @@ class dataAnalizer():
                 'cubic_model',
                 'cuartic_model',
                 'log_model',
-                'inv_log_model']
+                'inv_log_model',
+                'paralinear_model']
         
         dfLogP = pd.DataFrame(index = index, columns=['Experimental Data'])
         dfBIC = pd.DataFrame(index = index, columns=['Experimental Data'])
@@ -154,11 +176,14 @@ class dataAnalizer():
         dfWAIC.index.name = 'model'
 
         for model_name in index:
-            BIC, logP = calculate_BIC(model=model_dict[model_name], n = len(time))
-            dfLogP.loc[model_name,'Experimental Data'] =logP
-            dfBIC.loc[model_name,'Experimental Data'] =BIC
-            dfWAIC.loc[model_name,'Experimental Data'] = az.waic(trace_dict[model_name], pointwise=False).values[0]
-                
+            try:
+                BIC, logP = calculate_BIC(model=model_dict[model_name], n = len(time))
+                dfLogP.loc[model_name,'Experimental Data'] =logP
+                dfBIC.loc[model_name,'Experimental Data'] =BIC
+                dfWAIC.loc[model_name,'Experimental Data'] = az.waic(trace_dict[model_name], pointwise=False).values[0]
+            except KeyError:
+                continue
+                            
         dfLogP = pd.melt(dfLogP.reset_index(), id_vars=['model'], var_name='Data', value_name='log_likelihood')
         dfBIC = pd.melt(dfBIC.reset_index(), id_vars=['model'], var_name='Data', value_name='BIC')
         dfWAIC = pd.melt(dfWAIC.reset_index(), id_vars=['model'], var_name='Data', value_name='WAIC')
@@ -179,3 +204,5 @@ class dataAnalizer():
         compare_data = az.compare(trace_dict, ic = 'WAIC')
         az.plot_compare(compare_data)
         plt.savefig(f'output_info/{self.path}/selection_metrics/WAIC_Compare.png')
+        plt.close()
+        

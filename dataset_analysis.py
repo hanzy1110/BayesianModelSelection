@@ -1,5 +1,6 @@
 import os
-from src.data_analizer import dataAnalizer, create_dirs
+from src.data_analizer import dataAnalizer
+from src.helpers import create_dirs
 
 root, dirs, files = next(os.walk('test_data'))
 
