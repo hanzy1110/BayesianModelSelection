@@ -8,6 +8,7 @@ __pycache__/
 
 test_data/*
 output_info/*
+testing/*
 
 # Distribution / packaging
 .Python
