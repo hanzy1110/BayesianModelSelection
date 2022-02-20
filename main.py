@@ -7,6 +7,7 @@ root, dirs, files = next(os.walk('test_data'))
 for file in files[:4]:
     create_dirs(data_path=file)
     analyzer = dataAnalizer(folder_path='test_data', filename=file)
+    analyzer.plot_data_prior()
     trace_dict, model_dict = analyzer.perform_inference_on_models()
     analyzer.posterior_predictive_check(trace_dict, model_dict)
     analyzer.model_selection_metric_plots(trace_dict, model_dict)

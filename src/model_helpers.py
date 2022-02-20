@@ -1,6 +1,8 @@
 import numpy as np
 import theano.tensor as tt
 from scipy.optimize import fsolve
+from patsy import dmatrix
+
 
 def poly_model(time:np.ndarray, n:int=1) -> np.ndarray:
     return np.power(time, 1/n)
@@ -13,7 +15,6 @@ def inv_log_model(time:np.ndarray) -> np.ndarray:
 
 
 # Helper functions to run and use the paralinear model
-
 
 def helper(mass_gain, t, kp, kl):
     return mass_gain - kp/kl * (1-np.exp(mass_gain)**(kl/kp)) - t
@@ -39,3 +40,11 @@ def paralinear_model(time, kp, kl):
     for i, t in enumerate(time):
         _mass_gain[i] = fsolve(lambda x: helper_3(x, t, kp, kl), x0=1)
     return _mass_gain
+
+# Helpers to use the Spline regression
+def build_design_Matrix(time:np.ndarray, n_quantiles:int):
+    
+    knot_list = np.quantile(time, q=np.linspace(0,1,n_quantiles))
+    B = dmatrix("bs(time, knots=knots, degree=3, include_intercept=True) - 1",
+                {"time": time, "knots": knot_list[1:-1]},)
+    return B

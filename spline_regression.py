@@ -79,7 +79,7 @@ mass_gain_data_post = data.copy().reset_index(drop=True)
 mass_gain_data_post["pred_mean"] = post_pred["mean"]
 mass_gain_data_post["pred_hdi_lower"] = post_pred["hdi_3%"]
 mass_gain_data_post["pred_hdi_upper"] = post_pred["hdi_97%"]
-
+    
 mass_gain_data_post.plot.scatter(
     "time",
     "mass gain",

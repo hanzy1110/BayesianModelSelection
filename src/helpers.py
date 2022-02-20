@@ -14,7 +14,7 @@ def create_dirs(data_path:str):
     if not os.path.exists('output_info'):
         os.mkdir('output_info')
         
-    dirs_to_build = ['summaries', 'tracePlots', 'ppcPlots', 'selection_metrics']
+    dirs_to_build = ['summaries', 'tracePlots', 'ppcPlots', 'selection_metrics', 'prior_plot']
     
     try:
         data_path = data_path.replace('.csv', '')
