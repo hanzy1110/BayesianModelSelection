@@ -36,16 +36,24 @@ class dataAnalizer():
         
         self.path = filename.replace('.csv', '')
     
-    def sanitize_data(self) -> Tuple[np.ndarray, np.ndarray]:
+    def sanitize_data(self) -> Tuple[Dict[str,np.ndarray], Dict[str,np.ndarray]]:
         time = np.array(self.data[self.keys[0]].values)
         time = time[~np.isnan(time)]
         
         mass_gain = np.array(self.data[self.keys[1]].values)
         mass_gain = mass_gain[~np.isnan(mass_gain)]
         
-        # TODO implement something to normalize/sanitize data other than dropping NaNs
+        mass_gain_max = np.max(mass_gain)
+        time_max = np.max(time)
         
-        return time, mass_gain
+        mass_gain /= np.max(mass_gain)
+        time /= np.max(time)
+        
+        # TODO implement something to normalize/sanitize data other than dropping NaNs
+        mass_dict = {'mass_gain':mass_gain, 'norm_const':mass_gain_max}
+        time_dict = {'time':time, 'norm_const':time_max}
+        
+        return time_dict, mass_dict
     
     def plot_data_prior(self)->None:
         time, mass_gain = self.sanitize_data()
@@ -54,7 +62,7 @@ class dataAnalizer():
         plt.xlabel('Time')
         plt.ylabel('Mass Gain')
         
-        plt.scatter(time, mass_gain, color = 'firebrick')
+        plt.scatter(time['time'], mass_gain['mass_gain'], color = 'firebrick')
         plt.savefig(f'output_info/{self.path}/prior_plot/plot.png')
         plt.close()
         
@@ -62,8 +70,8 @@ class dataAnalizer():
         observed_values_transformation:Callable) -> Tuple[pm.Model, np.ndarray, np.ndarray]:
 
         time, mass_gain = self.sanitize_data()
-        time = time_funtion(time)
-        mass_gain = observed_values_transformation(mass_gain)
+        time = time_funtion(time['time'])
+        mass_gain = observed_values_transformation(mass_gain['mass_gain'])
 
         with pm.Model() as model:
 
@@ -89,7 +97,7 @@ class dataAnalizer():
 
             # mu = mass_gain - kp/kl * (1-exp_mass_gain**(kl/kp))
 
-            mu = mean_func(mass_gain, t=0, kp=kp, kl=kl)
+            mu = mean_func(mass_gain['mass_gain'], t=0, kp=kp, kl=kl)
 
             # Use studentT since it gave better results!
             nu = pm.HalfNormal('Nu', sigma=1)
@@ -99,26 +107,26 @@ class dataAnalizer():
                                     mu=mu,
                                     nu=nu,
                                     sigma=noise,
-                                    observed=time)
+                                    observed=time['time'])
         return model, time, mass_gain
 
     def build_spline_regression_model(self, n_knots:int=4):
         time, mass_gain = self.sanitize_data()
-        B = build_design_Matrix(time, n_knots)
+        B = build_design_Matrix(time['time'], n_knots)
         
-        COORDS = {"obs": np.arange(len(mass_gain)), "splines": np.arange(B.shape[1])}
+        COORDS = {"obs": np.arange(len(mass_gain['mass_gain'])), "splines": np.arange(B.shape[1])}
         with pm.Model(coords=COORDS) as spline_model:
             a = pm.Normal("a", 100, 5)
             
-            alphas = pm.Exponential("alphas", lam = 1, dims = "splines") 
-            betas = pm.Exponential("betas", lam = 1, dims = "splines") 
+            alphas = pm.HalfNormal("alphas", sigma = 1, dims = "splines") 
+            betas = pm.HalfNormal("betas", sigma = 1, dims = "splines") 
             w = pm.Gamma("w", alpha=alphas, beta = betas, dims="splines")
             
             mu = pm.Deterministic("mu", a + pm.math.dot(np.asarray(B, order="F"), w.T))
             sigma = pm.Exponential("sigma", 1)
             # nu = pm.Exponential("nu", 1)
             # D = pm.StudentT("D", nu = nu, mu=mu, sigma=sigma, observed=mass_gain, dims="obs")
-            D = pm.Normal("D", mu=mu, sigma=sigma, observed=mass_gain, dims="obs")
+            D = pm.Normal("D", mu=mu, sigma=sigma, observed=mass_gain['mass_gain'], dims="obs")
         
         return spline_model, time, mass_gain
 
@@ -153,8 +161,6 @@ class dataAnalizer():
                         prior_pred = pm.sample_prior_predictive()
                         post_pred = pm.sample_posterior_predictive(trace)
                         trace.extend(az.from_pymc3(prior=prior_pred, posterior_predictive=post_pred))
-                        az.plot_trace(trace, var_names=["a", "w", "sigma"])
-                        az.plot_forest(trace, var_names=["w"], combined=False)
                 
                 except SamplingError as e:
                     #TODO We should rebuild the model with new params
@@ -174,8 +180,6 @@ class dataAnalizer():
                         prior_pred = pm.sample_prior_predictive()
                         post_pred = pm.sample_posterior_predictive(trace)
                         trace.extend(az.from_pymc3(prior=prior_pred, posterior_predictive=post_pred))
-                        az.plot_trace(trace, var_names=["a", "w", "sigma"])
-                        az.plot_forest(trace, var_names=["w"], combined=False)
                 
                 trace_dict[model] = trace
                 model_dict[model] = Inference_model
@@ -202,7 +206,7 @@ class dataAnalizer():
             if model == 'paralinear_model':
                 try:
                     pm.plot_posterior_predictive_glm(trace_dict[model],
-                                 eval=time,
+                                 eval=time['time'],
                                  lm=lambda x, sample: args[0](
                                      x, sample['kp'], sample['kl']),
                                  samples=100,
@@ -211,34 +215,41 @@ class dataAnalizer():
                     print('model isnt available!')
                     continue
             # This part might need some refactoring
-            if model == 'spline_regression':
+            elif model == 'spline_regression':
                 try:
                     with model_dict[model]:
                         post_pred = az.summary(trace_dict[model], 
                                            var_names=["mu"]).reset_index(drop=True)
-                    post_pred['time'] = time
+                    post_pred['time'] = time['time']
                     
-                    post_pred.plot("time", "pred_mean", ax=plt.gca(), lw=3, color="firebrick")
+                    plt.plot(post_pred["time"], post_pred["mean"], lw=3, color="firebrick")
                     plt.fill_between(
                         post_pred.time,
-                        post_pred.pred_hdi_lower,
-                        post_pred.pred_hdi_upper,
+                        post_pred["hdi_3%"],
+                        post_pred["hdi_97%"],
                         color="firebrick",
                         alpha=0.4,
                     )
+                    # plt.scatter(time['time'], mass_gain['mass_gain'], label = 'Experimental Data', 
+                    #     color="cornflowerblue")
+                                
+                    # plt.savefig(f'output_info/{self.path}/ppcPlots/{model}.png')
                     
-                except KeyError:
+                except KeyError as e:
+                    print(e)
                     print("Model isn't available!")
                     continue
                 
             else:
+                print('-'*30)
+                print(model)
                 pm.plot_posterior_predictive_glm(trace_dict[model],
-                                            eval = time,
+                                            eval = time['time'],
                                             lm = lambda x,sample: args[1](sample['C'] + sample['k'] * args[0](x)), 
                                             samples=100, 
                                             label="Posterior Predictive regression lines")
             
-            plt.scatter(time, mass_gain, label = 'Experimental Data', 
+            plt.scatter(time['time'], mass_gain['mass_gain'], label = 'Experimental Data', 
                         color="cornflowerblue")
         
             plt.legend()
@@ -261,7 +272,7 @@ class dataAnalizer():
 
         for model_name in index:
             try:
-                BIC, logP = calculate_BIC(model=model_dict[model_name], n = len(time))
+                BIC, logP = calculate_BIC(model=model_dict[model_name], n = len(time['time']))
                 dfLogP.loc[model_name,'Experimental Data'] =logP
                 dfBIC.loc[model_name,'Experimental Data'] =BIC
                 dfWAIC.loc[model_name,'Experimental Data'] = az.waic(trace_dict[model_name], pointwise=False).values[0]
